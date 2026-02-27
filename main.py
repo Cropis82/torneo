@@ -1,29 +1,24 @@
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel
+from tinydb import TinyDB, Query
 import random
 
 app = FastAPI(title="Il Mio Torneo API")
 
-squadre = {
-    1: {"nome": "Fettucine FC", "capitano": "Gianni Rossi", "classe": "4Z inf3", "giocatori": 7, "stato": "iscritto", "posizioneFinale": "iscritto"},
-    2: {"nome": "Pitoni da campo", "capitano": "Serpente Solido", "classe": "5O con2", "giocatori": 7, "stato": "iscritto", "posizioneFinale": "iscritto"}
-}
 
-class team(BaseModel):
+db = TinyDB("torneo_db.json")
+squadre_table = db.table("squadre")
+gironi_table = db.table("gironi")
+
+TeamQuery = Query()
+GironeQuery = Query()
+
+
+class Team(BaseModel):
     nome: str
     capitano: str
     classe: str
     giocatori: int
-
-gironi = {
-    1: {
-        "vincitore1": 0, "vincitore2": 0, 
-        "IDsquadra1": 1, "punteggio1": 0, 
-        "IDsquadra2": 2, "punteggio2": 0, 
-        "IDsquadra3": 3, "punteggio3": 0, 
-        "IDsquadra4": 4, "punteggio4": 0
-    }
-}
 
 class AggiornaGirone(BaseModel):
     vincitore1: int
@@ -34,145 +29,167 @@ class AggiornaGirone(BaseModel):
     punteggio4: int
 
 
+
+def genera_nuovo_id(table):
+    records = table.all()
+    if not records:
+        return 1
+    return max(item["id"] for item in records) + 1
+
+
 @app.get("/squadre")
 def leggi_tutto_il_squadre():
-    """Restituisce tutte le squadre."""
-    return {"squadre": squadre}
+    return {"squadre": squadre_table.all()}
+
 
 @app.get("/squadre/{team_id}")
 def leggi_singolo_team(team_id: int):
-    """Cerca un team specifico tramite il suo ID nell'URL."""
-    if team_id not in squadre:
+    team = squadre_table.get(TeamQuery.id == team_id)
+    if not team:
         raise HTTPException(status_code=404, detail="team non trovato")
-    return squadre[team_id]
+    return team
 
 
 @app.post("/squadre", status_code=status.HTTP_201_CREATED)
-def aggiungi_team(nuovo_team: team):
-    """Aggiunge un nuovo team alle squadre, inizializzando le statistiche del torneo."""
-    nuovo_id = max(squadre.keys()) + 1 if squadre else 1
-    
-    squadre[nuovo_id] = {
-        "nome": nuovo_team.nome, 
-        "capitano": nuovo_team.capitano, 
-        "classe": nuovo_team.classe, 
+def aggiungi_team(nuovo_team: Team):
+
+    nuovo_id = genera_nuovo_id(squadre_table)
+
+    team_data = {
+        "id": nuovo_id,
+        "nome": nuovo_team.nome,
+        "capitano": nuovo_team.capitano,
+        "classe": nuovo_team.classe,
         "giocatori": nuovo_team.giocatori,
         "stato": "iscritto",
         "posizioneFinale": "iscritto"
     }
-    return {"messaggio": "team aggiunto con successo!", "dati": squadre[nuovo_id]}
+
+    squadre_table.insert(team_data)
+
+    return {"messaggio": "team aggiunto con successo!", "dati": team_data}
 
 
 @app.put("/squadre/{team_id}")
-def aggiorna_team(team_id: int, team_aggiornato: team):
-    """Modifica un team esistente mantenendo inalterato il suo stato nel torneo."""
-    if team_id not in squadre:
-        raise HTTPException(status_code=404, detail="team non trovato, impossibile aggiornare")
-    
-    stato_attuale = squadre[team_id].get("stato", "iscritto")
-    posizione_attuale = squadre[team_id].get("posizioneFinale", "iscritto")
-    
-    squadre[team_id] = {
-        "nome": team_aggiornato.nome, 
-        "capitano": team_aggiornato.capitano, 
-        "classe": team_aggiornato.classe, 
+def aggiorna_team(team_id: int, team_aggiornato: Team):
+
+    team = squadre_table.get(TeamQuery.id == team_id)
+
+    if not team:
+        raise HTTPException(status_code=404, detail="team non trovato")
+
+    stato_attuale = team["stato"]
+    posizione_attuale = team["posizioneFinale"]
+
+    squadre_table.update({
+        "nome": team_aggiornato.nome,
+        "capitano": team_aggiornato.capitano,
+        "classe": team_aggiornato.classe,
         "giocatori": team_aggiornato.giocatori,
         "stato": stato_attuale,
         "posizioneFinale": posizione_attuale
-    }
-    return {"messaggio": "team aggiornato!", "dati": squadre[team_id]}
+    }, TeamQuery.id == team_id)
+
+    return {"messaggio": "team aggiornato!"}
 
 
 @app.delete("/squadre/{team_id}")
 def elimina_team(team_id: int):
-    """Rimuove un team dalle squadre."""
-    if team_id not in squadre:
-        raise HTTPException(status_code=404, detail="team non trovato, impossibile eliminare")
-    
-    del squadre[team_id]
-    return {"messaggio": f"team {team_id} eliminato dalle squadre"}
+
+    if not squadre_table.get(TeamQuery.id == team_id):
+        raise HTTPException(status_code=404, detail="team non trovato")
+
+    squadre_table.remove(TeamQuery.id == team_id)
+
+    return {"messaggio": f"team {team_id} eliminato"}
+
 
 
 @app.get("/gironi")
 def leggi_tutti_i_gironi():
-    """Restituisce tutti i gironi di qualifica."""
-    return {"gironi": gironi}
+    return {"gironi": gironi_table.all()}
 
 
 @app.get("/gironi/{girone_id}")
 def leggi_singolo_girone(girone_id: int):
-    """Cerca un girone specifico tramite il suo ID."""
-    if girone_id not in gironi:
+    girone = gironi_table.get(GironeQuery.id == girone_id)
+
+    if not girone:
         raise HTTPException(status_code=404, detail="Girone non trovato")
-    return gironi[girone_id]
+
+    return girone
 
 
 @app.put("/gironi/{girone_id}")
-def aggiorna_punteggi_girone(girone_id: int, dati_aggiornati: AggiornaGirone):
-    """Aggiorna i punteggi e i vincitori di un girone specifico."""
-    if girone_id not in gironi:
-        raise HTTPException(status_code=404, detail="Girone non trovato, impossibile aggiornare")
-    
-    girone_attuale = gironi[girone_id]
-    
-    gironi[girone_id] = {
-        "IDsquadra1": girone_attuale["IDsquadra1"],
-        "IDsquadra2": girone_attuale["IDsquadra2"],
-        "IDsquadra3": girone_attuale["IDsquadra3"],
-        "IDsquadra4": girone_attuale["IDsquadra4"],
-        "vincitore1": dati_aggiornati.vincitore1,
-        "vincitore2": dati_aggiornati.vincitore2,
-        "punteggio1": dati_aggiornati.punteggio1,
-        "punteggio2": dati_aggiornati.punteggio2,
-        "punteggio3": dati_aggiornati.punteggio3,
-        "punteggio4": dati_aggiornati.punteggio4
-    }
-    
-    return {"messaggio": "Punteggi del girone aggiornati!", "dati": gironi[girone_id]}
+def aggiorna_punteggi_girone(girone_id: int, dati: AggiornaGirone):
+
+    girone = gironi_table.get(GironeQuery.id == girone_id)
+
+    if not girone:
+        raise HTTPException(status_code=404, detail="Girone non trovato")
+
+    gironi_table.update({
+        "vincitore1": dati.vincitore1,
+        "vincitore2": dati.vincitore2,
+        "punteggio1": dati.punteggio1,
+        "punteggio2": dati.punteggio2,
+        "punteggio3": dati.punteggio3,
+        "punteggio4": dati.punteggio4
+    }, GironeQuery.id == girone_id)
+
+    return {"messaggio": "Girone aggiornato!"}
 
 
 @app.post("/gironi/genera", status_code=status.HTTP_201_CREATED)
 def genera_gironi_automaticamente():
-    """Smista casualmente le squadre iscritte in gironi da 4."""
-    
+
     squadre_iscritte = [
-        id_team for id_team, dati in squadre.items() 
-        if dati.get("stato") == "iscritto"
+        team for team in squadre_table.all()
+        if team["stato"] == "iscritto"
     ]
-    
+
     if len(squadre_iscritte) < 4:
         raise HTTPException(
-            status_code=400, 
-            detail="Non ci sono abbastanza squadre per formare almeno un girone (minimo 4)."
+            status_code=400,
+            detail="Servono almeno 4 squadre"
         )
-    
+
     random.shuffle(squadre_iscritte)
-    
-    gironi.clear()
-    
-    nuovo_id_girone = 1
-    
+
+    gironi_table.truncate()
+
+    nuovo_id = 1
+
     for i in range(0, len(squadre_iscritte), 4):
+
         gruppo = squadre_iscritte[i:i+4]
-        
+
         while len(gruppo) < 4:
-            gruppo.append(0)
-        
-        gironi[nuovo_id_girone] = {
-            "vincitore1": 0, "vincitore2": 0,
-            "IDsquadra1": gruppo[0], "punteggio1": 0,
-            "IDsquadra2": gruppo[1], "punteggio2": 0,
-            "IDsquadra3": gruppo[2], "punteggio3": 0,
-            "IDsquadra4": gruppo[3], "punteggio4": 0
+            gruppo.append({"id": 0})
+
+        girone_data = {
+            "id": nuovo_id,
+            "vincitore1": 0,
+            "vincitore2": 0,
+            "IDsquadra1": gruppo[0]["id"],
+            "punteggio1": 0,
+            "IDsquadra2": gruppo[1]["id"],
+            "punteggio2": 0,
+            "IDsquadra3": gruppo[2]["id"],
+            "punteggio3": 0,
+            "IDsquadra4": gruppo[3]["id"],
+            "punteggio4": 0
         }
-        
-        for id_team in gruppo:
-            if id_team != 0:
-                squadre[id_team]["stato"] = f"girone {nuovo_id_girone}"
-                
-        nuovo_id_girone += 1
-        
-    return {
-        "messaggio": f"Smistamento completato! Generati {nuovo_id_girone - 1} gironi.", 
-        "gironi": gironi
-    }
+
+        gironi_table.insert(girone_data)
+
+        for team in gruppo:
+            if team["id"] != 0:
+                squadre_table.update(
+                    {"stato": f"girone {nuovo_id}"},
+                    TeamQuery.id == team["id"]
+                )
+
+        nuovo_id += 1
+
+    return {"messaggio": "Gironi generati con successo"}
